@@ -9,7 +9,7 @@ from airflow.operators.dummy import DummyOperator
 from airflow.models.variable import Variable
 from google.cloud import bigquery
 import os
-
+from  airflow.providers.google.cloud.transfers.gcs_to_local import GCSToLocalFilesystemOperator
 from airflow.providers.google.cloud.operators.bigquery import (BigQueryUpdateTableOperator,
                                                                BigQueryCreateEmptyDatasetOperator,
                                                                BigQueryGetDatasetTablesOperator)
@@ -45,9 +45,17 @@ with DAG(
     catchup=False,
 ) as dag:
 
+    extract_business_from_GCS = GCSToLocalFilesystemOperator(
+        task_id="extract_business_from_GCS",
+        object_name="yelp_academic_dataset_business.json",
+        bucket="is3107_yelp_dataset_etl",
+        filename=f"{BASE_PATH}/data",
+        
+    ) 
+
     def extract_business(**kwargs):
         ti = kwargs['ti']         
-        business_df = pd.read_json(f"{BASE_PATH}/yelp_academic_dataset_business.json", lines=True)
+        business_df = pd.read_json(f"{BASE_PATH}/data.json", lines=True)
         business_df = business_df[['business_id',"name","city","state","stars","review_count","categories","attributes",
                                    "latitude","longitude"]]
         # drop row with null values (selected colunmns)
