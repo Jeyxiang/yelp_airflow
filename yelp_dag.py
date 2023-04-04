@@ -38,22 +38,22 @@ BUSINESS_TABLE_ID = "yelp_business"
 with DAG(
     'yelp_dataset_etl',
     default_args=default_args,
-    description='DAG to extract Yelp Dataset from local directory, perform cleaning and transformation before loading to BigQuery',
+    description='DAG to extract Yelp Dataset from GCS, perform cleaning and transformation before loading to BigQuery',
     schedule_interval=None,
     start_date=datetime(2021, 1, 1),
     tags=['example'],
     catchup=False,
 ) as dag:
-
+    
     extract_business_from_GCS = GCSToLocalFilesystemOperator(
         task_id="extract_business_from_GCS",
         object_name="yelp_academic_dataset_business.json",
         bucket="is3107_yelp_dataset_etl",
-        filename=f"{BASE_PATH}/data",
+        filename=f"{BASE_PATH}/data.json",
         
     ) 
 
-    def extract_business(**kwargs):
+    def load_business(**kwargs):
         ti = kwargs['ti']         
         business_df = pd.read_json(f"{BASE_PATH}/data.json", lines=True)
         business_df = business_df[['business_id',"name","city","state","stars","review_count","categories","attributes",
@@ -69,7 +69,7 @@ with DAG(
         Filtering out food establishments
         '''
         ti = kwargs['ti']   
-        extract_business_string = ti.xcom_pull(task_ids='extract_business', key='business_data')
+        extract_business_string = ti.xcom_pull(task_ids='load_business', key='business_data')
         business_data = json.loads(extract_business_string)      
         business_df = pd.DataFrame(business_data)
         business_df['categories'] = business_df['categories'].str.lower()
@@ -82,7 +82,7 @@ with DAG(
     def flatten_business(**kwargs):
         '''
         Flatten nested data by extracting useful information only.
-        Fields extracted from attributes: RestaurantsPriceRange2, RestaurantsReservations,RestaurantsDelivery
+        Fields extracted from 'attributes' : RestaurantsPriceRange2, RestaurantsReservations,RestaurantsDelivery
         '''
         ti = kwargs['ti']
         extract_filtered_business_string = ti.xcom_pull(task_ids='filter_business', key='filtered_business_data')
@@ -122,6 +122,7 @@ with DAG(
         filtered_business_df = filtered_business_df.drop(columns = ['attributes'])
         business_json_string = filtered_business_df.to_json(orient="records")
         ti.xcom_push('flatten_business_data', business_json_string)
+
 
 
     def group_business(**kwargs):
@@ -215,9 +216,9 @@ with DAG(
 
     # Python Operators
     
-    extract_business_task = PythonOperator(
-        task_id='extract_business',
-        python_callable=extract_business,
+    load_business_task = PythonOperator(
+        task_id='load_business',
+        python_callable=load_business,
     )
 
     filtered_business_task = PythonOperator(
@@ -256,6 +257,6 @@ with DAG(
     )
 
 
-extract_business_task >> filtered_business_task >> flatten_business_task >> load_business_bq
+extract_business_from_GCS >> load_business_task >> filtered_business_task >> flatten_business_task >> load_business_bq
 flatten_business_task >> group_business_task >> load_grouped_business_bq
 filtered_business_task >> count_categories_task >> load_categories_bq
