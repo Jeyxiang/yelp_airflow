@@ -53,6 +53,45 @@ with DAG(
         
     ) 
 
+    extract_tips_from_GCS = GCSToLocalFilesystemOperator(
+        task_id="extract_tip_from_GCS",
+        object_name="yelp_academic_dataset_tip.json",
+        bucket="is3107_yelp_dataset_etl",
+        filename=f"{BASE_PATH}/data_tip.json",
+    )
+
+    def load_tips(**kwargs):
+        ti = kwargs['ti'] 
+        tip_df = pd.read_json(f"{BASE_PATH}/data_tip.json",dtype={'user_id':str,
+                             'business_id':str, 'compliment_count' : int,
+                             'date':str,'text':str}, lines=True)
+        tip_df = tip_df[['user_id','business_id','text','compliment_count']]
+        tip_df = tip_df.dropna(subset = ['business_id','user_id','text','compliment_count'])
+        tip_df_string = tip_df.to_json(orient = "records")
+        ti.xcom_push('tips_data', tip_df_string)
+        
+
+    def filter_tips(**kwargs):
+        '''
+        Filtering out tips from food establishments
+        '''
+        ti = kwargs['ti']
+        tips_string = ti.xcom_pull(task_ids='load_tips', key='tips_data')
+        tips_data = json.loads(tips_string)
+        tips_df = pd.DataFrame(tips_data)
+
+        extract_filtered_business_string = ti.xcom_pull(task_ids='filter_business', key='filtered_business_data')
+        filtered_business_data = json.loads(extract_filtered_business_string)
+        filtered_business_df = pd.DataFrame(filtered_business_data)
+
+        filtered_tips_df = tips_df[(tips_df.business_id.isin(filtered_business_df.business_id))]
+        id_to_names = pd.Series(filtered_business_df.name.values,index=filtered_business_df.business_id).to_dict()
+        # map business id to business name
+        filtered_tips_df['names'] = filtered_tips_df['business_id'].map(id_to_names)
+        tips_df_string = filtered_tips_df.to_json(orient = "records")
+        ti.xcom_push('filtered_tips_data', tips_df_string)
+
+
     def load_business(**kwargs):
         ti = kwargs['ti']         
         business_df = pd.read_json(f"{BASE_PATH}/data.json", lines=True)
@@ -195,6 +234,24 @@ with DAG(
             print(e)
 
 
+    def load_tips_to_bq(**kwargs):
+        ti = kwargs['ti']
+        tips_string = ti.xcom_pull(task_ids='filter_tips', key='filtered_tips_data')
+        tips_data = json.loads(tips_string)
+        try:
+            bqclient = bigquery.Client(project = PROJECT_ID)    
+            dataset  = bqclient.dataset(DATASET_ID)
+            table = dataset.table("yelp_tips")
+            job_config = bigquery.LoadJobConfig(
+                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+                source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
+            )
+            job = bqclient.load_table_from_json(tips_data, table,job_config=job_config)
+            result = job.result()
+        except Exception as e:
+            print(e)
+
+
     def load_category_to_bq(**kwargs):
         ti = kwargs['ti']
         grouped_business_string = ti.xcom_pull(task_ids='count_categories', key='cat_data')
@@ -215,6 +272,16 @@ with DAG(
 
 
     # Python Operators
+
+    load_tips_task = PythonOperator(
+        task_id='load_tips',
+        python_callable=load_tips,
+    )
+
+    filter_tips_task = PythonOperator(
+        task_id='filter_tips',
+        python_callable=filter_tips,
+    )
     
     load_business_task = PythonOperator(
         task_id='load_business',
@@ -251,6 +318,11 @@ with DAG(
         python_callable=load_names_to_bq,
     )
 
+    load_tips_bq = PythonOperator(
+        task_id='load_tips_to_bq',
+        python_callable=load_tips_to_bq,
+    )
+
     load_categories_bq = PythonOperator(
         task_id='load_cat_to_bq',
         python_callable=load_category_to_bq,
@@ -260,3 +332,5 @@ with DAG(
 extract_business_from_GCS >> load_business_task >> filtered_business_task >> flatten_business_task >> load_business_bq
 flatten_business_task >> group_business_task >> load_grouped_business_bq
 filtered_business_task >> count_categories_task >> load_categories_bq
+extract_tips_from_GCS >> load_tips_task >> filter_tips_task
+filtered_business_task >> filter_tips_task >> load_tips_bq
