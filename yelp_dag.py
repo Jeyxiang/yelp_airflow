@@ -1,30 +1,27 @@
 from datetime import datetime
 import requests
 import pandas as pd
-# from pymongo import MongoClient
 import json
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.operators.dummy import DummyOperator
 from airflow.models.variable import Variable
 from google.cloud import bigquery
+import hashlib
 import os
-from  airflow.providers.google.cloud.transfers.gcs_to_local import GCSToLocalFilesystemOperator
+
+from airflow.providers.google.cloud.transfers.gcs_to_local import GCSToLocalFilesystemOperator
 from airflow.providers.google.cloud.operators.bigquery import (BigQueryUpdateTableOperator,
                                                                BigQueryCreateEmptyDatasetOperator,
                                                                BigQueryGetDatasetTablesOperator)
 
 
-default_args = {
-    'owner': 'airflow',
-}
 
-#Vairables need to be configured first by going to Airflow webserver > admin > variables > create new variable called BASE_PATH and equal it to folder where your json file is located
-#If not using any cloud storage, another way is to store to the JSON file on github and reference the link to read from. 
+'''
+Configure variables via Airflow webserver > admin > variables.
+'''
 
-
-BASE_PATH = Variable.get("BASE_PATH") # stored from os.path.abspath(os.curdir)
-CREDENTIALS = Variable.get("CREDENTIALS") # Path to JSON key object
+BASE_PATH = Variable.get("BASE_PATH") # relative path of where data is stored
+CREDENTIALS = Variable.get("CREDENTIALS") # Path to Service Account JSON key object
 
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = CREDENTIALS
 
@@ -33,7 +30,13 @@ GOOGLE_CONN_ID = "gcp_conn"
 PROJECT_ID = "yelp-data-warehouse"
 DATASET_ID = "yelp_dataset"
 BUSINESS_TABLE_ID = "yelp_business"
+CAT_TABLE_ID = "yelp_categories" 
+FRANCHISE_TABLE_ID = "yelp_franchise"
+TIPS_TABLE_ID = "yelp_tips"
 
+default_args = {
+    'owner': 'airflow',
+}
 
 with DAG(
     'yelp_dataset_etl',
@@ -49,9 +52,8 @@ with DAG(
         task_id="extract_business_from_GCS",
         object_name="yelp_academic_dataset_business.json",
         bucket="is3107_yelp_dataset_etl",
-        filename=f"{BASE_PATH}/data.json",
-        
-    ) 
+        filename=f"{BASE_PATH}/data_business.json",
+    )
 
     extract_tips_from_GCS = GCSToLocalFilesystemOperator(
         task_id="extract_tip_from_GCS",
@@ -61,19 +63,27 @@ with DAG(
     )
 
     def load_tips(**kwargs):
+        '''
+        After loading tips data, generate a unique hash id for each of the tips
+        '''
         ti = kwargs['ti'] 
         tip_df = pd.read_json(f"{BASE_PATH}/data_tip.json",dtype={'user_id':str,
-                             'business_id':str, 'compliment_count' : int,
+                             'business_id':str,
                              'date':str,'text':str}, lines=True)
-        tip_df = tip_df[['user_id','business_id','text','compliment_count']]
-        tip_df = tip_df.dropna(subset = ['business_id','user_id','text','compliment_count'])
+        tip_df = tip_df[['user_id','business_id','text','compliment_count','date']]
+        # remove any rows with NA
+        tip_df = tip_df.dropna(subset = ['business_id','user_id','text','compliment_count','date'])
+        # assign unique id to tips
+        tip_df['tips_id'] = tip_df.apply(lambda row : hashlib.sha256(
+                            (f"{row['date']}{row['user_id']}{row['business_id']}{len(row['text'])}"
+                                ).encode()).hexdigest(), axis = 1)
         tip_df_string = tip_df.to_json(orient = "records")
         ti.xcom_push('tips_data', tip_df_string)
         
 
     def filter_tips(**kwargs):
         '''
-        Filtering out tips from food establishments
+        Filtering out tips linked to food establishments
         '''
         ti = kwargs['ti']
         tips_string = ti.xcom_pull(task_ids='load_tips', key='tips_data')
@@ -93,27 +103,36 @@ with DAG(
 
 
     def load_business(**kwargs):
+        '''
+        Load business data
+        '''
         ti = kwargs['ti']         
-        business_df = pd.read_json(f"{BASE_PATH}/data.json", lines=True)
+        business_df = pd.read_json(f"{BASE_PATH}/data_business.json", dtype={'name':str, "city": str, "state" : str,
+                        'business_id':str, "review_count" : int, 'stars' : int, "categories" : list, "attributes" : dict,
+                            'latitude':str,'longitude':str}, lines=True)
+        
         business_df = business_df[['business_id',"name","city","state","stars","review_count","categories","attributes",
                                    "latitude","longitude"]]
-        # drop row with null values (selected colunmns)
+        
+        # remove any rows with NA (selected colunmns)
         business_df = business_df.dropna(subset = ['business_id','stars','review_count','city','state','categories'])
-        business_df_string = business_df.to_json()
+        business_df_string = business_df.to_json(orient = "records")
         ti.xcom_push('business_data', business_df_string)
               
         
     def filter_business(**kwargs):
         '''
-        Filtering out food establishments
+        Filtering out businesses that are food establishments
         '''
         ti = kwargs['ti']   
         extract_business_string = ti.xcom_pull(task_ids='load_business', key='business_data')
         business_data = json.loads(extract_business_string)      
         business_df = pd.DataFrame(business_data)
         business_df['categories'] = business_df['categories'].str.lower()
-        food_df  = business_df[(business_df['categories'].str.contains(pat = 'food', regex = True)) 
-                             | (business_df['categories'].str.contains(pat = 'restaurants', regex = True))]
+        food_df  = business_df[(business_df['categories'].str.contains(pat = 'cafe', regex = True)) 
+                            | (business_df['categories'].str.contains(pat = 'restaurants', regex = True))
+                            | (business_df['categories'].str.contains(pat = 'food', regex = True))
+                            ]
         food_json_string = food_df.to_json(orient="records")
         ti.xcom_push('filtered_business_data', food_json_string)
 
@@ -121,14 +140,14 @@ with DAG(
     def flatten_business(**kwargs):
         '''
         Flatten nested data by extracting useful information only.
-        Fields extracted from 'attributes' : RestaurantsPriceRange2, RestaurantsReservations,RestaurantsDelivery
+        Fields extracted from attributes: RestaurantsPriceRange2, RestaurantsReservations,RestaurantsDelivery
         '''
         ti = kwargs['ti']
         extract_filtered_business_string = ti.xcom_pull(task_ids='filter_business', key='filtered_business_data')
         filtered_business_data = json.loads(extract_filtered_business_string)
         filtered_business_df = pd.DataFrame(filtered_business_data)
 
-        # new columns
+        # new columns to add
         priceRange = []
         hasReservations = []
         hasDelivery = []
@@ -166,7 +185,7 @@ with DAG(
 
     def group_business(**kwargs):
         '''
-        Group businesses by names, aggregate fields
+        Group businesses by names, aggregate the fields
         '''
         ti = kwargs['ti']
         extract_filtered_business_string = ti.xcom_pull(task_ids='flatten_business', key='flatten_business_data')
@@ -174,12 +193,14 @@ with DAG(
         filtered_business_df = pd.DataFrame(filtered_business_data)
         name_df = filtered_business_df.groupby(['name']
                     ).agg({'stars' : 'mean', 'review_count' : 'sum', 'name' : 'count',
-                    'has_reservation' : lambda x: (x == True).sum(), 'has_delivery' : lambda x: (x == True).sum()}
+                        'has_reservation' : lambda x: (x == True).sum(), 'has_delivery' : lambda x: (x == True).sum()}
                     ).rename(columns = {'stars' : 'avg_review','name' : 'total_outlets',
-                    'has_reservation' : 'accept_reservations', 'has_delivery' : 'offer_delivery'}
+                        'has_reservation' : 'reservation_count', 'has_delivery' : 'delivery_count'}
                     ).reset_index()
+        # rename business name to fname
+        name_df = name_df.rename(columns = {'name' : 'fname'})
         name_json_string = name_df.to_json(orient="records")
-        ti.xcom_push('name_data', name_json_string)
+        ti.xcom_push('franchise_data', name_json_string)
 
 
     def count_categories(**kwargs):
@@ -193,7 +214,7 @@ with DAG(
         cat_df = filtered_business_df['categories'].apply(lambda x: pd.value_counts(x.split(", "))).sum(axis = 0).to_frame()
         cat_df = cat_df.reset_index()
         cat_df.columns = ['category','count']
-        cat_df = cat_df[(cat_df.category != 'food') & (cat_df.category != 'restaurants')]
+        cat_df = cat_df[(cat_df.category != 'food') & (cat_df.category != 'restaurants') & (cat_df.category != 'cafes')]
         cat_json_string = cat_df.to_json(orient="records")
         ti.xcom_push('cat_data', cat_json_string)
 
@@ -211,27 +232,31 @@ with DAG(
                 source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
             )
             job = bqclient.load_table_from_json(flatten_business_data, table, job_config=job_config)
-            result = job.result()
+            job.result()  # Waits for the job to complete.
+            destination_table = bqclient.get_table(f"{PROJECT_ID}.{DATASET_ID}.{BUSINESS_TABLE_ID}")
+            print("Loaded {} rows.".format(destination_table.num_rows))
         except Exception as e:
             print(e)
 
 
-    def load_names_to_bq(**kwargs):
+    def load_franchise_to_bq(**kwargs):
         ti = kwargs['ti']
-        cat_json_string = ti.xcom_pull(task_ids='group_business', key='name_data')
-        cat_data = json.loads(cat_json_string) 
+        cat_json_string = ti.xcom_pull(task_ids='group_business', key='franchise_data')
+        cat_data = json.loads(cat_json_string)
         try:
             bqclient = bigquery.Client(project = PROJECT_ID)    
             dataset  = bqclient.dataset(DATASET_ID)
-            table = dataset.table("yelp_names")
+            table = dataset.table(FRANCHISE_TABLE_ID)
             job_config = bigquery.LoadJobConfig(
                 write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
                 source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
             )
             job = bqclient.load_table_from_json(cat_data, table,job_config=job_config)
-            print(job.result())
+            job.result()  # Waits for the job to complete.
+            destination_table = bqclient.get_table(f"{PROJECT_ID}.{DATASET_ID}.{FRANCHISE_TABLE_ID}")
+            print("Loaded {} rows.".format(destination_table.num_rows))
         except Exception as e:
-            print(e)
+            print("Load job for franchise failed", e)
 
 
     def load_tips_to_bq(**kwargs):
@@ -241,15 +266,18 @@ with DAG(
         try:
             bqclient = bigquery.Client(project = PROJECT_ID)    
             dataset  = bqclient.dataset(DATASET_ID)
-            table = dataset.table("yelp_tips")
+            table = dataset.table(TIPS_TABLE_ID)
             job_config = bigquery.LoadJobConfig(
                 write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
                 source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
             )
             job = bqclient.load_table_from_json(tips_data, table,job_config=job_config)
-            result = job.result()
+            job.result()  # Waits for the job to complete.
+            destination_table = bqclient.get_table(f"{PROJECT_ID}.{DATASET_ID}.{TIPS_TABLE_ID}")
+            print("Loaded {} rows.".format(destination_table.num_rows))
         except Exception as e:
-            print(e)
+            print("Load job for tips failed", e)
+
 
 
     def load_category_to_bq(**kwargs):
@@ -259,15 +287,18 @@ with DAG(
         try:
             bqclient = bigquery.Client(project = PROJECT_ID)    
             dataset  = bqclient.dataset(DATASET_ID)
-            table = dataset.table("yelp_categories")
+            table = dataset.table(CAT_TABLE_ID)
             job_config = bigquery.LoadJobConfig(
                 write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
                 source_format=bigquery.SourceFormat.NEWLINE_DELIMITED_JSON,
             )
             job = bqclient.load_table_from_json(grouped_business_data, table,job_config=job_config)
-            result = job.result()
+            job.result()  # Waits for the job to complete.
+            destination_table = bqclient.get_table(f"{PROJECT_ID}.{DATASET_ID}.{CAT_TABLE_ID}")
+            print("Loaded {} rows.".format(destination_table.num_rows))
+
         except Exception as e:
-            print(e)
+            print("Load job for category failed", e)
 
 
 
@@ -313,9 +344,9 @@ with DAG(
         python_callable=load_business_to_bq,
     )
 
-    load_grouped_business_bq = PythonOperator(
-        task_id='load_names_to_bq',
-        python_callable=load_names_to_bq,
+    load_franchise_bq = PythonOperator(
+        task_id='load_franchise_to_bq',
+        python_callable=load_franchise_to_bq,
     )
 
     load_tips_bq = PythonOperator(
@@ -330,7 +361,7 @@ with DAG(
 
 
 extract_business_from_GCS >> load_business_task >> filtered_business_task >> flatten_business_task >> load_business_bq
-flatten_business_task >> group_business_task >> load_grouped_business_bq
+flatten_business_task >> group_business_task >> load_franchise_bq
 filtered_business_task >> count_categories_task >> load_categories_bq
 extract_tips_from_GCS >> load_tips_task >> filter_tips_task
 filtered_business_task >> filter_tips_task >> load_tips_bq
