@@ -31,7 +31,7 @@ In your google cloud platform console, create a new project.
 ### B. Create service account
 Under IAM and Admin, set up your Google Cloud Platform service account by granting the right admin and access privileges. Granted roles include Editor and Storage Admin. Once created, you can view the service account on the main page. It is important that your service account is created under the project you have just initialised.
 
-Click into the service account and navigate to the Keys tab to create a private key. Select JSON as the key type and upon creation, the key will be automatically downloaded into your computer. Keep track of the path to where the key is stored for section e.
+Click into the service account and navigate to the Keys tab to create a private key. Select JSON as the key type and upon creation, the key will be automatically downloaded into your computer. Keep track of the path to where the key is stored for section E.
 
 ### C. Create Google Cloud Storage and Buckets
 
@@ -47,7 +47,7 @@ Under the yelp_dag.py file, fill in the variables accordingly. Alternatively, th
 
 * Credentials is the file path to where your service account json file is stored.
 * Base path is where you want the data to be stored locally after extracting them from GCS
-* Bucket name is the name of your bucket created in Section 7.1.3
+* Bucket name is the name of your bucket created in Section C.
 * Change the project id to your own project id based on your project in console.cloud.google.com
 * Under BigQuery, copy and change the dataset id. (For example, for a copied dataset id “yelp-test-384317.yelp_dataset”, “yelp_dataset” will be the dataset id)
 * Table ids will be the ID of your table once the DAG is executed. Ensure it follows the [naming convention](https://cloud.google.com/bigquery/docs/tables#:~:text=When%20you%20create%20a%20table,)
