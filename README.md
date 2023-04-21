@@ -34,13 +34,15 @@ Under IAM and Admin, set up your Google Cloud Platform service account by granti
 Click into the service account and navigate to the Keys tab to create a private key. Select JSON as the key type and upon creation, the key will be automatically downloaded into your computer. Keep track of the path to where the key is stored for section E.
 
 ### C. Create Google Cloud Storage and Buckets
+Under Cloud Storage, go to buckets and click create. Create a storage bucket with a unique name, and the rest of the settings can remain at the default selected ones. Once the bucket has been created, select the bucket and upload files. Upload the 2 JSON files from the yelp dataset for business and tips. The final product should look something like this:
+![image](https://user-images.githubusercontent.com/77261306/233565525-846c330a-792e-4e8e-9c62-1156807cef84.png)
 
 ### D. Initialise Big Query
 Under the BigQuery, create a dataset under this project.
 * Data set ID (example: yelp_dataset)
 * Data location. Choose the nearest one from your current location.
 
-#### E. Set up variables in Airflow
+### E. Set up variables in Airflow
 ![image](https://user-images.githubusercontent.com/77261306/233475751-5cb5c87b-2a34-434d-bcca-dd1ad4d5816a.png)
 
 Under the yelp_dag.py file, fill in the variables accordingly. Alternatively, the variables can be stored as global variables on Airflow webserver > admin > variables.
@@ -48,7 +50,7 @@ Under the yelp_dag.py file, fill in the variables accordingly. Alternatively, th
 * Credentials is the file path to where your service account json file is stored.
 * Base path is where you want the data to be stored locally after extracting them from GCS
 * Bucket name is the name of your bucket created in Section C.
-* Change the project id to your own project id based on your project in console.cloud.google.com
+* Change the project id to your own project id based on your [project](console.cloud.google.com)
 * Under BigQuery, copy and change the dataset id. (For example, for a copied dataset id “yelp-test-384317.yelp_dataset”, “yelp_dataset” will be the dataset id)
 * Table ids will be the ID of your table once the DAG is executed. Ensure it follows the [naming convention](https://cloud.google.com/bigquery/docs/tables#:~:text=When%20you%20create%20a%20table,)
 * To establish connection to Google cloud, you must set:
@@ -56,7 +58,7 @@ Under the yelp_dag.py file, fill in the variables accordingly. Alternatively, th
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = CREDENTIALS
 ```
 
-#### F. Running airflow
+### F. Running airflow
 To run airflow webserver and scheduler, run the following commands
 ```
 airflow webserver –port [port number]
