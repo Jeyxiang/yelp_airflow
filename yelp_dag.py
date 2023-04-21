@@ -23,10 +23,8 @@ Configure variables via Airflow webserver > admin > variables.
 BASE_PATH = Variable.get("BASE_PATH") # relative path of where data is stored
 CREDENTIALS = Variable.get("CREDENTIALS") # Path to Service Account JSON key object
 
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = CREDENTIALS
-
 # CONFIG VARIABLES
-GOOGLE_CONN_ID = "gcp_conn"
+BUCKET_NAME = "is3107_yelp_dataset_etl"
 PROJECT_ID = "yelp-data-warehouse"
 DATASET_ID = "yelp_dataset"
 BUSINESS_TABLE_ID = "yelp_business"
@@ -34,6 +32,7 @@ CAT_TABLE_ID = "yelp_categories"
 FRANCHISE_TABLE_ID = "yelp_franchise"
 TIPS_TABLE_ID = "yelp_tips"
 
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = CREDENTIALS
 default_args = {
     'owner': 'airflow',
 }
@@ -51,14 +50,14 @@ with DAG(
     extract_business_from_GCS = GCSToLocalFilesystemOperator(
         task_id="extract_business_from_GCS",
         object_name="yelp_academic_dataset_business.json",
-        bucket="is3107_yelp_dataset_etl",
+        bucket=BUCKET_NAME,
         filename=f"{BASE_PATH}/data_business.json",
     )
 
     extract_tips_from_GCS = GCSToLocalFilesystemOperator(
         task_id="extract_tip_from_GCS",
         object_name="yelp_academic_dataset_tip.json",
-        bucket="is3107_yelp_dataset_etl",
+        bucket=BUCKET_NAME,
         filename=f"{BASE_PATH}/data_tip.json",
     )
 
