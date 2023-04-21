@@ -18,6 +18,8 @@ By building a robust and efficient ETL pipeline that can process raw batch data 
 
 #### [Source Data](https://www.yelp.com/dataset)
 
+#### [Dashboard(https://public.tableau.com/views/IS3107G37Tableau/FinalDB2?:language=en-US&publish=yes&:display_count=n&:origin=viz_share_link)
+
 ## 2. Setup
 For this project, we are running on Python 3.8.10 and Airflow 2.5.2. Python libraries like pandas, numpy, nltk, matplotlib will be used.We are also using [google’s provider package](https://airflow.apache.org/docs/apache-airflow-providers-google/stable/index.html) to utilize the google cloud services. A shared service account key is used to authenticate with the google cloud services.
 
